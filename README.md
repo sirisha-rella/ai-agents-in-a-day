@@ -74,7 +74,7 @@ If the model is already downloaded, Part 1's download cell finds the files and f
 
 | Symptom | Likely cause and fix |
 |---|---|
-| Browser says "site can't be reached" | Jupyter is not running (check with `ss -ltnp \| grep 8888`). Run the command in [Open the notebooks](#2-open-the-notebooks) again and use the link it prints. |
+| Browser says "site can't be reached" | Jupyter did not start. Run `tail ~/jupyter.log`. If it says `No such directory`, you are not using the cloned repo: check that `~/ai-agents-in-a-day/notebooks` exists. If port 8888 is already in use, run `pkill -f jupyter-lab`, then run the command in [Open the notebooks](#2-open-the-notebooks) again. |
 | The model server runs out of memory at start | Lower `--gpu-memory-utilization` to `0.70`, then lower `--max-model-len`, and run the cell again. |
 | Hermes prints a tool call as text instead of running it | Seen occasionally in testing. Run the cell again. |
 | `prefetch.sh` shows `[FAIL]` | Run it again. Finished downloads are skipped. |
