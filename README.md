@@ -42,35 +42,13 @@ It retries failed downloads, keeps going if one step fails, and ends with an `[O
 
 ## 2. Open the notebooks
 
-When the script finishes it prints the command to start JupyterLab. Run it on the Spark:
+Run this one command on the Spark. It starts JupyterLab and prints a link; click or paste the link into your browser.
 
 ```bash
-~/nemotron-labs/.venv/bin/jupyter lab --notebook-dir ~/ai-agents-in-a-day/notebooks --ip=127.0.0.1 --port=8888 --no-browser
+TOKEN=$(openssl rand -hex 16); nohup ~/nemotron-labs/.venv/bin/jupyter lab --notebook-dir ~/ai-agents-in-a-day/notebooks --ip=0.0.0.0 --port=8888 --no-browser --IdentityProvider.token=$TOKEN > ~/jupyter.log 2>&1 & sleep 3; echo "Open: http://$(hostname -I | awk '{print $1}'):8888/lab?token=$TOKEN"
 ```
 
-Jupyter prints a URL with a token. To reach it from your own computer, open an SSH tunnel from your computer:
-
-```bash
-ssh -L 8888:localhost:8888 <user>@<spark-ip>
-```
-
-Then open `http://localhost:8888/lab?token=<token>` in your browser.
-
-### If you connect directly instead
-
-Start Jupyter with `--ip=0.0.0.0` and open it by **IP address**. Jupyter prints the Spark's hostname in its URL (for example `http://spark-14b8:8888/...`), and your computer usually cannot resolve that name, so the browser says "site can't be reached". Replace the hostname with the Spark's IP address:
-
-```bash
-hostname -I        # run on the Spark; the first address is usually the one you want
-```
-
-```
-http://<spark-ip>:8888/lab?token=<token>
-```
-
-`--ip=0.0.0.0` lets anyone on the network who has the token run code on the Spark. Use it only on a network you trust, and stop Jupyter when you are done.
-
-To list the running Jupyter servers and their tokens: `~/nemotron-labs/.venv/bin/jupyter server list`. It can list stale entries from servers that have stopped. The live one is the one with a process listening on its port (`ss -ltnp | grep 8888`).
+Anyone on your network who has the link can run code on the Spark, so use it on a network you trust.
 
 ## 3. Run the labs
 
@@ -96,7 +74,7 @@ If the model is already downloaded, Part 1's download cell finds the files and f
 
 | Symptom | Likely cause and fix |
 |---|---|
-| Browser says "site can't be reached" | Jupyter is not running (`ss -ltnp \| grep 8888`), or you used the hostname instead of the IP address. See [Open the notebooks](#2-open-the-notebooks). |
+| Browser says "site can't be reached" | Jupyter is not running (check with `ss -ltnp \| grep 8888`). Run the command in [Open the notebooks](#2-open-the-notebooks) again and use the link it prints. |
 | The model server runs out of memory at start | Lower `--gpu-memory-utilization` to `0.70`, then lower `--max-model-len`, and run the cell again. |
 | Hermes prints a tool call as text instead of running it | Seen occasionally in testing. Run the cell again. |
 | `prefetch.sh` shows `[FAIL]` | Run it again. Finished downloads are skipped. |
