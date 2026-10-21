@@ -20,6 +20,7 @@ IMAGES=("vllm/vllm-openai:v0.20.0" "ubuntu:24.04" "buildpack-deps:noble-curl")
 RETRIES=5
 RESULTS=()
 KEEPALIVE=""
+NEED_RELOGIN=0
 
 stamp() { date '+%H:%M:%S'; }
 log()   { printf '\n[%s] === %s\n' "$(stamp)" "$*"; }
@@ -49,12 +50,58 @@ start_sudo() {
   KEEPALIVE=$!
 }
 
+# Runs docker as the current user, or with sudo while the user is not yet in the
+# docker group (group changes only apply to new logins).
+dk() {
+  if docker info >/dev/null 2>&1; then docker "$@"; else sudo docker "$@"; fi
+}
+
 check_system() {
   nvidia-smi -L | head -1
   uname -m
   df -h "$HOME" | tail -1
-  docker info >/dev/null 2>&1 && echo "Docker usable" || echo "Docker NOT usable"
   return 0
+}
+
+gpu_in_docker() {
+  dk run --rm --gpus all ubuntu:24.04 nvidia-smi -L >/dev/null 2>&1
+}
+
+ensure_docker() {
+  # Installs only what is missing. The NVIDIA driver is not installed here.
+  nvidia-smi -L >/dev/null 2>&1 || { echo "nvidia-smi does not work: the NVIDIA driver must be installed first."; return 1; }
+
+  if ! command -v docker >/dev/null; then
+    echo "Docker is not installed. Installing docker.io from the Ubuntu repository."
+    sudo apt-get update && sudo apt-get install -y docker.io || return 1
+    sudo systemctl enable --now docker || return 1
+  fi
+
+  # Test real GPU access instead of looking at Docker's runtime list: a working
+  # setup should not be touched. Only configure the toolkit if this test fails.
+  retry dk pull ubuntu:24.04 || return 1
+  if ! gpu_in_docker; then
+    echo "A container cannot see the GPU. Setting up the NVIDIA Container Toolkit."
+    if ! command -v nvidia-ctk >/dev/null; then
+      curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+        | sudo gpg --dearmor --yes -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg || return 1
+      curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+        | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
+        | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list >/dev/null || return 1
+      sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit || return 1
+    fi
+    sudo nvidia-ctk runtime configure --runtime=docker || return 1
+    sudo systemctl restart docker || return 1
+  fi
+
+  if ! docker info >/dev/null 2>&1; then
+    echo "Adding $USER to the docker group."
+    sudo usermod -aG docker "$USER" || return 1
+    NEED_RELOGIN=1
+  fi
+
+  gpu_in_docker || { echo "A container still cannot see the GPU."; return 1; }
+  echo "Docker is ready: a container can see the GPU."
 }
 
 python_env() {
@@ -79,7 +126,7 @@ pull_images() {
   local rc=0 img
   for img in "${IMAGES[@]}"; do
     echo "[$(stamp)] pulling $img"
-    retry docker pull "$img" || rc=1
+    retry dk pull "$img" || rc=1
   done
   return "$rc"
 }
@@ -103,7 +150,7 @@ verify() {
   local rc=0 img
   if [[ -f "$MODEL_DIR/config.json" ]]; then echo "model:   $(du -sh "$MODEL_DIR" | cut -f1) in $MODEL_DIR"; else echo "model:   MISSING"; rc=1; fi
   for img in "${IMAGES[@]}"; do
-    if docker image inspect "$img" >/dev/null 2>&1; then echo "image:   $img"; else echo "image:   MISSING $img"; rc=1; fi
+    if dk image inspect "$img" >/dev/null 2>&1; then echo "image:   $img"; else echo "image:   MISSING $img"; rc=1; fi
   done
   if PATH="$HOME/.local/bin:$PATH" command -v hermes >/dev/null; then echo "hermes:  installed"; else echo "hermes:  MISSING"; rc=1; fi
   if command -v openshell >/dev/null; then echo "openshell: installed"; else echo "openshell: MISSING"; rc=1; fi
@@ -115,6 +162,7 @@ echo "Prefetch started $(date)"
 start_sudo || true
 
 step "System check (informational)" check_system
+step "Docker with GPU access"       ensure_docker
 step "Python environment"           retry python_env
 step "Model weights"                retry download_model
 step "Docker images"                pull_images
@@ -128,6 +176,11 @@ echo
 if printf '%s\n' "${RESULTS[@]}" | grep -q '^\[FAIL\]'; then
   echo "Some steps failed. Re-run this script: finished downloads are skipped."
 else
+  if (( NEED_RELOGIN )); then
+    echo "IMPORTANT: you were added to the docker group. Log out and back in (or reboot)"
+    echo "before running the notebooks, so that 'docker' works without sudo."
+    echo
+  fi
   echo "All done. To open the notebooks, start JupyterLab:"
   echo
   echo "  $VENV/bin/jupyter lab --notebook-dir \"$NOTEBOOKS_DIR\" --ip=127.0.0.1 --port=8888 --no-browser"
